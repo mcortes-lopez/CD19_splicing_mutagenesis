@@ -23,5 +23,6 @@ Preprint:
 - [Other RBP analysis](RBP_predictions)
 
 
-Most of the analysis require the CD19 exon 1-3 minigene annotation:
-[**CD19** minigene](minigene_annotation)
+Most of the analyses require the _CD19_ exon 1-3 minigene annotation:
+
+[_CD19_ minigene](minigene_annotation)
