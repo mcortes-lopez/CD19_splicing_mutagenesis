@@ -1,0 +1,318 @@
+---
+title: "RBP panels"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+author: "Mariela Cortés López"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_float: true
+---
+
+```{r}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, out.width = "100%")
+```
+
+
+```{r setup}
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+library(eulerr)
+```
+
+
+# Universe of RBPs
+
+The first panel describes the universe of proteins used in each motif prediction assay. 
+
+- AtTRACT - All RBPs in the database, obtained [here](https://attract.cnic.es/attract/static/download/download_db/53b630ff-6067-4cc4-a61b-4c7a8d51884d.txt#)
+- oRNAment - All RBPs in the database, obtained from [here](http://rnabiology.ircm.qc.ca/BIF/oRNAment/static/RBP_id_encoding.csv.gz)
+- DeepRiPe - All RBPs used to train the models, obtained upon request. 
+
+
+```{r}
+tested_rbps <- readLines("data/2021_TestedRBPs.list")
+
+attract_rbps <- fread("https://attract.cnic.es/attract/static/download/download_db/53b630ff-6067-4cc4-a61b-4c7a8d51884d.txt")
+
+
+attract_rbps <- attract_rbps %>%
+  filter(grepl("ENSG[0-9]", `Gene ID`)) %>%
+  mutate(
+    `Gene ID` = gsub("\\*", "", `Gene ID`),
+    `Gene Name` = gsub("\\*", "", `Gene Name`)
+  ) %>%
+  unique() %>%
+  rename(
+    "ENSEMBL_ID" = "Gene ID",
+    "RBP" = "Gene Name"
+  )
+
+
+ornament_rbps <- fread("http://rnabiology.ircm.qc.ca/BIF/oRNAment/static/RBP_id_encoding.csv.gz")
+names(ornament_rbps) <- c("number_id", "RBP")
+
+ensembl_ids <- fread("http://rnabiology.ircm.qc.ca/BIF/oRNAment/static/Homo_sapiens_string_to_int_ID_conversion.csv.gz")
+
+names(ensembl_ids) <- c("TX_ID", "ENSEMBL_ID", "GENE_NAME", "N_ID1", "N_ID2")
+
+ensembl_ids <- ensembl_ids %>%
+  select(-TX_ID, -N_ID1, -N_ID2) %>%
+  unique()
+
+ornament_rbps <- ornament_rbps %>%
+  select(-number_id) %>%
+  mutate(RBP = gsub(" .*", "", RBP)) %>%
+  unique()
+
+ornament_rbps <- left_join(ornament_rbps, ensembl_ids, by = c("RBP" = "GENE_NAME"))
+
+
+ornament_rbps <- ornament_rbps %>%
+  select(ENSEMBL_ID, RBP) %>%
+  drop_na() %>%
+  distinct(RBP, .keep_all = T)
+
+
+deepripe_rbps <- readRDS("data/DeepRiPe_universe.rds")
+deepripe_rbps <-
+  rbindlist(lapply(deepripe_rbps, as.data.frame), use.names = T, idcol = "set")
+
+names(deepripe_rbps) <- c("set", "RBP")
+
+deepripe_rbps <- left_join(deepripe_rbps, ensembl_ids, by = c("RBP" = "GENE_NAME")) %>%
+  distinct(set, RBP, .keep_all = T) %>%
+  drop_na()
+```
+
+
+## All unique RBPs per tool 
+```{r eval=FALSE, include=FALSE}
+writeLines(con = "output/2021_filtered_RBP_names.list", text = unique(unlist(rbp_unique_names, use.names = F)))
+```
+
+
+```{r}
+
+rbp_unique_names <- list(
+  "AtTRACT" = unique(attract_rbps$RBP),
+  "oRNAment" = unique(ornament_rbps$RBP),
+  "DeepRiPe" = unique(deepripe_rbps$RBP)
+)
+
+rbp_uni_plot <- plot(euler(rbp_unique_names, shape = "circle"),
+  quantities = TRUE,
+  main = paste0("Total unique RBPs = ", length(unique(unlist(rbp_unique_names))))
+)
+
+print(rbp_uni_plot)
+```
+
+
+Overlapping RBPs 
+
+```{r OV_all, results='asis'}
+cat(paste("*", sort(Reduce(intersect, rbp_unique_names))),
+  sep = "\n"
+)
+```
+
+
+
+Candidate RBPs
+
+```{r Candidates_all, results='asis'}
+ as.data.frame( table((unlist(rbp_unique_names)[unlist(rbp_unique_names) %in% tested_rbps]))) %>% 
+  kableExtra::kable()
+```
+
+
+## Predicted RBP sites 
+
+```{r}
+
+# AtTRACT
+attract_p_rbps <- fread("data/CD19_merged_bs_wSeq.bed")
+colnames(attract_p_rbps) <- c("chr", "hg38_start", "hg38_end", "RBP_motif", "merged_motifs", "strand")
+
+attract_p_rbps <- gsub("_.*", "", attract_p_rbps$RBP_motif) %>%
+  unique()
+
+attract_p_rbps <- attract_p_rbps[attract_p_rbps %in% attract_rbps$RBP]
+
+
+# oRNAment
+ornament_p_rbps <- fread("data/motifs_exon1-3.cleaned.tsv")
+ornament_p_rbps <- gsub("\\s\\(.*\\)", "", ornament_p_rbps$motif) %>%
+  unique()
+
+ornament_p_rbps <- ornament_p_rbps[ornament_p_rbps %in% ornament_rbps$RBP]
+
+
+# DeepRiPe
+
+deepripe_p_rbps <- fread("data/rbp_variant_scores_DeepRiPe.csv") %>%
+  mutate(POS = gsub("[A-Z]([0-9]+)[A-Z]", "\\1", variant)) %>%
+  separate(ref_alt, c("REF", "ALT"))
+
+deepripe_p_rbps <- unique(deepripe_p_rbps$RBP)
+deepripe_p_rbps <- deepripe_p_rbps[deepripe_p_rbps %in% deepripe_rbps$RBP]
+```
+
+
+```{r}
+rbp_predicted <- list(
+  "AtTRACT" = attract_p_rbps,
+  "oRNAment" = ornament_p_rbps,
+  "DeepRiPe" = deepripe_p_rbps
+)
+
+rbp_pred_plot <- plot(euler(rbp_predicted, shape = "circle"),
+  quantities = TRUE,
+  main = paste0("Total predicted RBPs = ", length(unique(unlist(rbp_predicted))))
+)
+
+print(rbp_pred_plot)
+```
+
+
+Overlapping **predicted** RBPs 
+
+```{r OV_predicted, results='asis'}
+cat(paste("*", sort(Reduce(intersect, rbp_predicted))),
+  sep = "\n"
+)
+```
+
+
+
+Candidate RBPs
+
+```{r Candidates_predicted, results='asis'}
+ as.data.frame( table((unlist(rbp_predicted)[unlist(rbp_predicted) %in% tested_rbps]))) %>% 
+  kableExtra::kable()
+```
+
+
+## RBPs with significant predictions 
+
+```{r}
+# AtTRACT
+attract_ps_rbps <- fread("output/tab/motif_sig_pos/EmpiricalCutoff_AtTRACT_sig_pos_per_RBP.tab") %>%
+  drop_na()
+attract_ps_rbps <- unique(attract_ps_rbps$RBP)
+attract_ps_rbps <- attract_ps_rbps[attract_ps_rbps %in% attract_rbps$RBP]
+
+# oRNAment
+
+ornament_ps_rbps <- fread("output/tab/motif_sig_pos/EmpiricalCutoff_oRNAment_sig_pos_per_RBP.tab") %>%
+  drop_na()
+ornament_ps_rbps <- unique(ornament_ps_rbps$RBP)
+ornament_ps_rbps <- ornament_ps_rbps[ornament_ps_rbps %in% ornament_rbps$RBP]
+
+# DeepRiPe
+
+deepripe_ps_rbps <- fread("output/tab/motif_sig_pos/EmpiricalCutoff_DeepRiPe_predictions_sig_var.tab") %>%
+  filter(total_sig_pos > 0)
+
+deepripe_ps_rbps <- unique(deepripe_ps_rbps$RBP)
+deepripe_ps_rbps <- deepripe_ps_rbps[deepripe_ps_rbps %in% deepripe_rbps$RBP]
+```
+
+
+```{r}
+rbp_predicted_sig <- list(
+  "AtTRACT" = attract_ps_rbps,
+  "oRNAment" = ornament_ps_rbps,
+  "DeepRiPe" = deepripe_ps_rbps
+)
+rbp_sig_plot <- plot(euler(rbp_predicted_sig, shape = "circle"),
+  quantities = TRUE,
+  main = paste0(
+    "Total predicted RBPs with significant binding sites = ",
+    length(unique(unlist(rbp_predicted_sig)))
+  ), cex = 0.5
+)
+print(rbp_sig_plot)
+```
+
+Overlapping **predicted with significant binding sites** RBPs 
+
+```{r OV_sig_predicted, results='asis'}
+cat(paste("*", sort(Reduce(intersect, rbp_predicted_sig))),
+  sep = "\n"
+)
+```
+
+
+Candidate RBPs
+
+```{r Candidates_filter, results='asis'}
+ as.data.frame(table((unlist(rbp_predicted_sig)[unlist(rbp_predicted_sig) %in% tested_rbps]))) %>% 
+  kableExtra::kable()
+```
+
+
+
+## Together
+
+```{r fig.width=15}
+library(cowplot)
+
+#pdf("output_pdf/20210713_Predicted_RBPs_eulerPlot.pdf", width = 12, height = 4, family = "ArialMT")
+plot_grid(rbp_uni_plot,
+  rbp_pred_plot,
+  rbp_sig_plot,
+  nrow = 1,
+  labels = c("Universe", "Predicted", "Significant"),
+  label_size = 15,
+  label_x = 0, label_y = 0,
+  hjust = -0.5, vjust = -0.5
+)
+#dev.off()
+```
+
+
+
+# Per dataset 
+
+```{r Euler_individual}
+euler_plot_dt <- function(dset) {
+  combined_filters <- list(
+    "Universe" = unique(eval(as.symbol(paste0(dset, "_rbps")))$RBP),
+    "Predicted" = eval(as.symbol(paste0(dset, "_p_rbps"))),
+    "Sig. Predicted" = eval(as.symbol(paste0(dset, "_ps_rbps")))
+  )
+
+  eu_plot <- plot(euler(combined_filters, shape = "circle"),
+    quantities = TRUE,
+    main = paste0(
+      "Total RBPs = ",
+      length(unique(unlist(combined_filters)))
+    )
+  )
+
+  return(eu_plot)
+}
+```
+
+
+
+```{r, fig.width=12}
+#pdf("output_pdf/20210713_Predicted_RBPs_eulerPlot_PerDataset.pdf", width = 12, height = 4, family = "ArialMT")
+plot_grid(euler_plot_dt("attract"),
+  euler_plot_dt("ornament"),
+  euler_plot_dt("deepripe"),
+  nrow = 1,
+  labels = c("AtTRACT", "oRNAment", "DeepRiPe"), 
+    label_size = 15,
+  label_x = 0, label_y = 0,
+  hjust = -0.5, vjust = -0.5
+)
+
+#dev.off()
+```

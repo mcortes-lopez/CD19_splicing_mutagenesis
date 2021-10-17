@@ -1,0 +1,533 @@
+---
+title: "MaxEnt scores Paper figures"
+author: "Mariela Cortés López"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+  pdf_document:
+    
+    toc: yes
+---
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.pos = "center")
+```
+
+```{r source}
+library(ggplot2)
+library(dplyr)
+library(data.table)
+library(tidyr)
+```
+
+
+```{r Data_load}
+maxent <- readRDS("data/MaxEnt_values_with_single_mutant_scores.rds")
+
+splice_sites <- c(219, 475, 743, 1040, 1245, 657, 1073)
+```
+
+```{r CD19_gene_structure}
+cd19_exons <- data.frame(
+  start = c(69, 476, 1041),
+  end = c(218, 742, 1244),
+  start_hg38 = c(28931939, 28932346, 28932911),
+  end_hg38 = c(28932088, 28932612, 28933114),
+  exons = c("constitutive", "alternative", "constitutive")
+)
+
+
+fasta_seq <- seqinr::read.fasta("/fsimb/groups/imb-koeniggr/mariela/CD19/CD19_genome/CD19_WT.minigene.fa")
+
+cd19_nts <- as.character(toupper(fasta_seq$chr1))
+```
+
+
+```{r Reformat_mutants}
+basic_nt <- c("A", "C", "G", "T")
+
+# Obtain the nucleotide corresponding to the intoduced mutation
+get_alt <- function(mut_option, refnt) {
+  basic_nt[!basic_nt %in% refnt][mut_option]
+}
+
+# Reformats the results for the mutants
+
+mut_reformat <- function(mut_list, sstype) {
+  ss_pattern <- ifelse(sstype == 3, "[A-Z]{18}AG[A-Z]{3}", "[A-Z]{3}GT[A-Z]{4}")
+
+  if (sstype == 3) {
+    seq_ss_pos <- rep(seq(0, 22), each = 3)
+    wt_ref <- maxent$ss3
+  }
+  else {
+    seq_ss_pos <- rep(seq(0, 8), each = 3)
+    wt_ref <- maxent$ss5
+  }
+
+  var_per_seq <- length(seq_ss_pos)
+
+  mut_df <- lapply(mut_list, function(x) {
+    var_df <- data.frame(
+      mut_sequence = names(x),
+      mut_maxent = unlist(x),
+      mut_frame = rep(1:3, length(x) / 3),
+      mut_POS = rep(seq_ss_pos, length(x) / var_per_seq)
+    )
+    row.names(var_df) <- NULL
+    var_df
+  }) %>%
+    rbindlist(., fill = F, idcol = "sequence")
+
+
+  mut_df <- mut_df %>%
+    mutate(POS1 = match(sequence, names(wt_ref))) %>%
+    mutate(
+      POS = POS1 + mut_POS,
+      REF = cd19_nts[POS]
+    ) %>%
+    rowwise() %>%
+    mutate(ALT = get_alt(mut_frame, REF)) %>%
+    ungroup() %>%
+    mutate(contains_ss_nt = grepl({{ ss_pattern }}, mut_sequence))
+
+  return(mut_df)
+}
+```
+
+
+# 3' splice sites  
+
+WT 3'ss windows with AG sites 
+
+```{r WT_3ss}
+ss3_wt <- data.frame(
+  sequence = names(maxent$ss3),
+  maxent = unlist(maxent$ss3),
+  POS = seq_along(maxent$ss3)
+)
+
+row.names(ss3_wt) <- NULL
+
+
+ss3_wt <- ss3_wt %>%
+  mutate(wt_window = ifelse(POS %in% (splice_sites[c(2, 4, 6, 7)] - 19), T, F)) %>%
+  mutate(contains_ss_nt = grepl("[A-Z]{18}AG[A-Z]{3}", sequence))
+
+
+ggplot() +
+  geom_rect(
+    data = cd19_exons,
+    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf, fill = exons),
+    alpha = 0.3, show.legend = F
+  ) +
+  geom_point(
+    data = ss3_wt %>%
+      filter(contains_ss_nt == T),
+    aes(POS + 18, maxent, colour = wt_window),
+    show.legend = F
+  ) +
+  ylab("MaxEnt score") +
+  xlab("Position in minigene") +
+  scale_colour_manual(values = c("black", "red")) +
+  scale_fill_manual(values = c("constitutive" = "black", "alternative" = "grey")) +
+  theme_classic()
+```
+
+
+Mutant 3'ss windows with AG sites 
+
+```{r}
+mut_3ss_df <- mut_reformat(maxent$mut_3ss, 3)
+
+ggplot() +
+  geom_rect(
+    data = cd19_exons,
+    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf, fill = exons),
+    alpha = 0.3, show.legend = F
+  ) +
+  geom_point(
+    data = mut_3ss_df %>%
+      filter(contains_ss_nt == T),
+    aes(POS1 + 18, mut_maxent), colour = "black",
+    show.legend = F, alpha = 0.3
+  ) +
+  geom_point(
+    data = ss3_wt %>%
+      filter(contains_ss_nt == T),
+    aes(POS + 18, maxent, colour = wt_window),
+    show.legend = F
+  ) +
+  ylab("MaxEnt score") +
+  xlab("Position in minigene") +
+  scale_colour_manual(values = c("royalblue", "red")) +
+  scale_fill_manual(values = c("constitutive" = "black", "alternative" = "grey")) +
+  theme_classic()
+```
+
+
+
+```{r PDF_rasterized_version, eval=FALSE, include=FALSE}
+library(ggrastr)
+
+pdf("out_plots/20210602_Fig_MaxEnt_3ss_mutants.pdf", width = 8, height = 5, family = "ArialMT", useDingbats = F)
+ggplot() +
+  geom_rect(
+    data = cd19_exons,
+    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf, fill = exons),
+    alpha = 0.3, show.legend = F
+  ) +
+  geom_point_rast(
+    data = mut_3ss_df %>%
+      filter(contains_ss_nt_mut == T),
+    aes(POS + 18, mut_maxent), colour = "black",
+    show.legend = F, alpha = 0.6, raster.dpi = 1200
+  ) +
+  geom_point(
+    data = ss3_wt %>%
+      filter(contains_ss_nt == T),
+    aes(POS + 18, maxent, colour = wt_window),
+    show.legend = F
+  ) +
+  ylab("MaxEnt score") +
+  xlab("Position in minigene") +
+  scale_colour_manual(values = c("royalblue", "red")) +
+  scale_fill_manual(values = c("constitutive" = "black", "alternative" = "grey")) +
+  theme_classic()
+
+dev.off()
+```
+
+```{r}
+ss3df <- rbindlist(list("mutant" = mut_3ss_df, "wt" = ss3_wt),
+                   use.names = T,
+                   fill = T,
+                   idcol = "set")
+
+ss3df <- ss3df %>% 
+  filter(contains_ss_nt== T) %>% 
+  mutate(dot_color = case_when(
+    set == "mutant" ~ "mut", 
+    set == "wt" & wt_window == T ~ "canonical",
+    set == "wt" & wt_window == F ~ "wt non-canonical")) %>% 
+  mutate(dot_color = factor(dot_color, levels = c("mut", "wt non-canonical", "canonical"), ordered = T)) %>% 
+  mutate(maxent = ifelse(set == "mutant", mut_maxent, maxent),
+         POS = ifelse(set == "mutant", POS1, POS))
+
+
+
+update3ss <- ggplot() +
+  geom_rect(
+    data = cd19_exons,
+    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf, fill = exons),
+    show.legend = F
+  ) +
+  geom_point_rast(
+    data = ss3df,
+    aes(POS + 18, maxent, colour = dot_color, size = dot_color, alpha = dot_color),
+    show.legend = F, 
+  ) +
+  ylab("MaxEnt score") +
+  xlab("Position in minigene") +
+  scale_alpha_manual(values = c("mut" = 0.25, "wt non-canonical" = 1, "canonical" = 1))+
+  scale_size_manual(values = c("mut" = 1, "wt non-canonical" = 1.5, "canonical" = 2))+
+  scale_colour_manual(values = c("mut" = "black", "wt non-canonical" = "royalblue", "canonical" = "red")) +
+  scale_fill_manual(values = c("constitutive" = "grey60", "alternative" = "grey90")) +
+  theme_classic()
+
+
+
+ggsave(filename = "out_plots/20210901_Fig_MaxEnt_3ss_mutants.pdf",
+       plot = update3ss,scale = 0.7, 
+       width = 8, height = 5, family = "ArialMT", useDingbats = F)
+```
+
+# 5' splice sites  
+
+WT 5'ss windows with GU sites 
+
+```{r WT_5ss}
+ss5_wt <- data.frame(
+  sequence = names(maxent$ss5),
+  maxent = unlist(maxent$ss5),
+  POS = seq_along(maxent$ss5)
+)
+
+row.names(ss5_wt) <- NULL
+
+
+ss5_wt <- ss5_wt %>%
+  mutate(wt_window = ifelse(POS %in% (splice_sites[-c(2, 4)] - 3), T, F)) %>%
+  mutate(contains_ss_nt = grepl("[A-Z]{3}GT[A-Z]{4}", sequence))
+
+ggplot() +
+  geom_rect(
+    data = cd19_exons,
+    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf, fill = exons),
+    alpha = 0.3, show.legend = F
+  ) +
+  geom_point(
+    data = ss5_wt %>%
+      filter(contains_ss_nt == T),
+    aes(POS + 3, maxent, colour = wt_window),
+    show.legend = F
+  ) +
+  ylab("MaxEnt score") +
+  xlab("Position in minigene") +
+  scale_colour_manual(values = c("black", "red")) +
+  scale_fill_manual(values = c("constitutive" = "black", "alternative" = "grey")) +
+  theme_classic()
+```
+
+Mutant 5'ss windows with AG sites 
+
+```{r}
+mut_5ss_df <- mut_reformat(maxent$mut5ss, 5)
+
+
+ggplot() +
+  geom_rect(
+    data = cd19_exons,
+    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf, fill = exons),
+    alpha = 0.3, show.legend = F
+  ) +
+  geom_point(
+    data = mut_5ss_df %>%
+      filter(contains_ss_nt == T),
+    aes(POS1 + 3, mut_maxent), colour = "black",
+    show.legend = F, alpha = 0.3
+  ) +
+  geom_point(
+    data = ss5_wt %>%
+      filter(contains_ss_nt == T),
+    aes(POS + 3, maxent, colour = wt_window),
+    show.legend = F
+  ) +
+  ylab("MaxEnt score") +
+  xlab("Position in minigene") +
+  scale_colour_manual(values = c("royalblue", "red")) +
+  scale_fill_manual(values = c("constitutive" = "black", "alternative" = "grey")) +
+  theme_classic()
+```
+
+
+
+```{r PDF_rasterized_version_5ss, eval=FALSE, include=FALSE}
+pdf("out_plots/20210602_Fig_MaxEnt_5ss_mutants.pdf", width = 8, height = 5, family = "ArialMT", useDingbats = F)
+ggplot() +
+  geom_rect(
+    data = cd19_exons,
+    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf, fill = exons),
+    alpha = 0.3, show.legend = F
+  ) +
+  geom_point_rast(
+    data = mut_5ss_df %>%
+      filter(contains_ss_nt == T),
+    aes(POS1 + 3, mut_maxent), colour = "black",
+    show.legend = F, alpha = 0.6, raster.dpi = 1200
+  ) +
+  geom_point(
+    data = ss5_wt %>%
+      filter(contains_ss_nt == T),
+    aes(POS + 3, maxent, colour = wt_window),
+    show.legend = F
+  ) +
+  ylab("MaxEnt score") +
+  xlab("Position in minigene") +
+  scale_colour_manual(values = c("royalblue", "red")) +
+  scale_fill_manual(values = c("constitutive" = "black", "alternative" = "grey")) +
+  theme_classic()
+
+dev.off()
+```
+
+
+```{r}
+ss5df <- rbindlist(list("mutant" = mut_5ss_df, "wt" = ss5_wt),
+                   use.names = T,
+                   fill = T,
+                   idcol = "set")
+
+ss5df <- ss5df %>% 
+  filter(contains_ss_nt== T) %>% 
+  mutate(dot_color = case_when(
+    set == "mutant" ~ "mut", 
+    set == "wt" & wt_window == T ~ "canonical",
+    set == "wt" & wt_window == F ~ "wt non-canonical")) %>% 
+  mutate(dot_color = factor(dot_color, levels = c("mut", "wt non-canonical", "canonical"), ordered = T)) %>% 
+  mutate(maxent = ifelse(set == "mutant", mut_maxent, maxent),
+         POS = ifelse(set == "mutant", POS1, POS))
+
+
+
+
+update5ss <- ggplot() +
+  geom_rect(
+    data = cd19_exons,
+    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf, fill = exons),
+    show.legend = F
+  ) +
+  geom_point_rast(
+    data = ss5df,
+     aes(POS + 3, maxent, colour = dot_color, size = dot_color, alpha = dot_color),
+    show.legend = F, 
+  ) +
+  ylab("MaxEnt score") +
+  xlab("Position in minigene") +
+  scale_alpha_manual(values = c("mut" = 0.25, "wt non-canonical" = 1, "canonical" = 1))+
+  scale_size_manual(values = c("mut" = 1, "wt non-canonical" = 1.5, "canonical" = 2))+
+  scale_colour_manual(values = c("mut" = "black", "wt non-canonical" = "royalblue", "canonical" = "red")) +
+  scale_fill_manual(values = c("constitutive" = "grey60", "alternative" = "grey90")) +
+  theme_classic()
+
+
+
+ggsave(filename = "out_plots/20210901_Fig_MaxEnt_5ss_mutants.pdf",
+       plot = update5ss, scale = 0.7,
+       width = 8, height = 5, family = "ArialMT", useDingbats = F)
+```
+
+
+# Individual splice sites 
+
+
+```{r Import isoform data }
+isoform_df <- readRDS("../Mutation_effects/Softmax_modelling/distribution_cutoffs.rds") %>%
+  select(-reps_cutoff_gamma, -reps_cutoff_empirical02, -reps_cutoff_gamma02, -reps_cutoff_normal, -pass_in)
+
+isoform_df <- isoform_df %>%
+  mutate(MUT = ifelse(nchar(ALT) > 1 | nchar(REF) > 1, "indel", ALT))
+# WT values
+wt_freq <- fread("../Mutation_effects/Softmax_modelling/20210506_WT_isoform_frequencies.tab") %>%
+  mutate(isoform = gsub(",", " ", isoforms)) %>%
+  mutate(isoform = gsub("_sum", "", isoform)) %>%
+  select(-isoforms)
+
+wt_stats <- wt_freq %>%
+  group_by(isoform, replicate) %>%
+  summarise(
+    mean_wt = mean(read_freq),
+    sd_wt = sd(read_freq),
+    median_wt = median(read_freq)
+  ) %>%
+  ungroup() %>%
+  pivot_wider(
+    names_from = replicate,
+    values_from = c(mean_wt, sd_wt, median_wt)
+  ) %>%
+  mutate(av = (mean_wt_1 + mean_wt_2) / 2) %>%
+  select(isoform, av)
+```
+
+
+```{r Format_df}
+ss3_wt_window <- ss3_wt %>%
+  filter(wt_window == T)
+ss5_wt_window <- ss5_wt %>%
+  filter(wt_window == T)
+
+mut_3ss_df_wt_window <- mut_3ss_df %>%
+  filter(sequence %in% ss3_wt_window$sequence)
+
+mut_5ss_df_wt_window <- mut_5ss_df %>%
+  filter(sequence %in% ss5_wt_window$sequence)
+
+wt_window <- rbind(ss3_wt_window, ss5_wt_window) %>%
+  select(-wt_window, -contains_ss_nt) %>%
+  bind_rows(replicate(5, ., simplify = FALSE)) %>%
+  mutate(isoform = rep(wt_stats$isoform, each = 5))
+
+wt_window <- left_join(wt_window, wt_stats, by = "isoform")
+
+wt_window_mut <- rbind(mut_3ss_df_wt_window, mut_5ss_df_wt_window)
+
+wt_window_mut <- left_join(wt_window_mut, isoform_df, by = c("POS", "REF", "ALT")) %>%
+  rename(maxent = mut_maxent)
+
+wt_window <- rbindlist(list(
+  "WT" = wt_window,
+  "mutant" = wt_window_mut
+),
+fill = T, idcol = "dataset"
+) %>%
+  mutate(MUT = ifelse(is.na(MUT), "WT", MUT))
+```
+
+
+```{r, fig.width=10, fig.height=12, out.width="100%", out.height="100%"}
+ss_id <- data.frame(
+  sequence = unique(wt_window$sequence),
+  id = c("2nd exon - 3'ss", "3rd exon - 3'ss", "1st exon - 5'ss", "2nd exon - 5'ss", "3rd exon - 5'ss")
+)
+
+ss_id$id <- factor(ss_id$id,
+  levels = c("1st exon - 5'ss", "2nd exon - 3'ss", "2nd exon - 5'ss", "3rd exon - 3'ss", "3rd exon - 5'ss"),
+  ordered = T
+)
+
+wt_window <- left_join(wt_window, ss_id, by = "sequence")
+
+wt_window <- wt_window %>%
+  mutate(effective = ifelse(is.na(reps_cutoff_empirical), "WT", reps_cutoff_empirical)) %>%
+  mutate(mut_lab = ifelse(reps_cutoff_empirical != 1, "", paste0(REF, POS, ALT))) %>%
+  mutate(dot_size = ifelse(dataset == "WT", 20, 1))
+
+library("ggthemes")
+
+ggplot(
+  data = wt_window %>%
+    filter(isoform == "(219 475)(743 1040)"),
+  aes(maxent, av,
+    label = mut_lab,
+    colour = MUT,
+    shape = effective,
+    size = MUT
+  ),
+) +
+  geom_point() +
+  facet_wrap(~id, ncol = 2, scales = "free") +
+  ggrepel::geom_text_repel(max.overlaps = 100, size = 2) +
+  scale_colour_manual(values = c("forestgreen", "royalblue", "goldenrod3", "red", "black")) +
+  xlab("MaxEnt scores") +
+  ylab("Inclusion frequency (%)") +
+  scale_shape_manual(values = c(1, 19, 19)) +
+  labs(shape = "Effective mutations", colour = "Mutation type") +
+  theme_minimal() +
+  theme(axis.line = element_line(), axis.ticks = element_line()) +
+  scale_x_continuous(limits = c(-5, 20)) +
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent_format(sufix = "")) +
+  scale_size_manual(values = c(rep(2, 4), 3))
+```
+
+
+
+```{r eval=FALSE, include=FALSE}
+
+pdf("out_plots/MaxEnt_Inclusion_Isoform_all_splice_sites_labelled.pdf", width = 10, height = 12, family = "ArialMT", useDingbats = F)
+ggplot(
+  data = wt_window %>%
+    filter(isoform == "(219 475)(743 1040)"),
+  aes(maxent, av,
+    label = mut_lab,
+    colour = MUT,
+    shape = effective,
+    size = MUT
+  ),
+) +
+  geom_point() +
+  facet_wrap(~id, ncol = 2, scales = "free") +
+  ggrepel::geom_text_repel(max.overlaps = 100, size = 2) +
+  scale_colour_manual(values = c("forestgreen", "royalblue", "goldenrod3", "red", "black")) +
+  xlab("MaxEnt scores") +
+  ylab("Inclusion frequency (%)") +
+  scale_shape_manual(values = c(1, 19, 19)) +
+  labs(shape = "Effective mutations", colour = "Mutation type") +
+  theme_minimal() +
+  theme(axis.line = element_line(), axis.ticks = element_line()) +
+  scale_x_continuous(limits = c(-5, 17)) +
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent_format(sufix = "")) +
+  scale_size_manual(values = c(rep(2, 4), 3))
+dev.off()
+```

@@ -1,0 +1,279 @@
+---
+title: "SpliceAI Summary"
+date: "14.06.2021"
+author: "Mariela Cortés López"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    keep_md: true
+---
+
+```{r}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, out.width = "100%")
+```
+
+```{r libraries}
+library(vcfR)
+library(tidyr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+vcfs <- list.files("spliceAI/", pattern = "vcf", full.names = T)
+```
+
+```{r shared-code, echo=FALSE}
+source("main_vcf_proccessing_fun.R")
+```
+
+```{r}
+
+process_vars <- lapply(vcfs, function(x) {
+  vcf_file <- read.vcfR(x, verbose = F)
+  proc_var_files(vcf_file)
+}) %>%
+  data.table::rbindlist(., use.names = T, idcol = "set")
+
+set_id <- gsub("(^.+)_predicted.*_effects_(.+)\\.vcf", "\\1_\\2", basename(vcfs))
+
+
+
+process_vars$set <- set_id[process_vars$set]
+
+
+filter_vars <- lapply(split(process_vars, process_vars$set), function(x) {
+  relevant_pos(x)
+}) %>% data.table::rbindlist(., use.names = T, idcol = "set")
+
+
+filter_vars <- filter_vars %>% mutate(mut_type = gsub("_mask|_unmask", "", set))
+
+hg38_pos <- seq(28931871, 28933144) # Vector with positions correspondent to the minigene
+
+filter_vars <- filter_vars %>%
+  mutate(POS = as.numeric(POS)) %>%
+  mutate_at(vars(c("POS", "POS_loss_hg38", "POS_gain_hg38")), .funs = list(minigene = ~ match(., hg38_pos))) %>%
+  rename(POS_loss_minigene = POS_loss_hg38_minigene, POS_gain_minigene = POS_gain_hg38_minigene) %>%
+  mutate(POS_loss_minigene = ifelse(ss_type == "3ss",
+    POS_loss_minigene - 1, POS_loss_minigene + 1
+  )) %>%
+  mutate(POS_gain_minigene = ifelse(ss_type == "3ss",
+    POS_gain_minigene - 1, POS_gain_minigene + 1
+  ))
+
+unfilter_vars <- lapply(split(process_vars, process_vars$set), function(x) {
+  relevant_pos(x, cutoff = 0)
+}) %>% data.table::rbindlist(., use.names = T, idcol = "set")
+
+unfilter_vars <- unfilter_vars %>%
+  mutate(mut_type = gsub("_mask|_unmask", "", set)) %>%
+  mutate(POS = as.numeric(POS)) %>%
+  mutate_at(vars(c("POS", "POS_loss_hg38", "POS_gain_hg38")), .funs = list(minigene = ~ match(., hg38_pos))) %>%
+  rename(POS_loss_minigene = POS_loss_hg38_minigene, POS_gain_minigene = POS_gain_hg38_minigene) %>%
+  mutate(POS_loss_minigene = ifelse(ss_type == "3ss",
+    POS_loss_minigene - 1, POS_loss_minigene + 1
+  )) %>%
+  mutate(POS_gain_minigene = ifelse(ss_type == "3ss",
+    POS_gain_minigene - 1, POS_gain_minigene + 1
+  ))
+```
+
+ 
+
+
+
+# Total mutations table
+
+
+```{r}
+unfilter_summary <- unfilter_vars %>%
+  count(set) %>%
+  mutate(set = gsub("_(mask)|_(unmask)", ":\\1\\2", set)) %>%
+  mutate(set = gsub("_", " ", set)) %>%
+  separate(set, into = c("set", "class"), sep = ":")
+
+
+filter_summary <- filter_vars %>%
+  count(set) %>%
+  mutate(set = gsub("_(mask)|_(unmask)", ":\\1\\2", set)) %>%
+  mutate(set = gsub("_", " ", set)) %>%
+  separate(set, into = c("set", "class"), sep = ":")
+
+
+merge(unfilter_summary, filter_summary, by = c("set", "class"), suffixes = c("_unfilter", "_filtered"), all = T) %>%
+  arrange(class) %>%
+  mutate(n_unfilter = n_unfilter / 2) %>%
+  # Because we separated the two splice sites
+  mutate(percent_significant = scales::percent(n_filtered / n_unfilter, accuracy = 0.01)) %>%
+  kableExtra::kable(., format = "html") %>%
+  kableExtra::kable_styling(full_width = T)
+```
+
+
+```{r}
+acceptor_list<-readRDS("../Mutation_effects/Isoform_Scores/isoform_acceptor_splice_sites_complete.rds")
+donor_list<-readRDS("../Mutation_effects/Isoform_Scores/isoform_donor_splice_sites_complete.rds")
+acceptor_freq<-unlist(acceptor_list) %>%
+  table() %>% as_tibble() 
+
+colnames(acceptor_freq)<-c("POS", "freq")
+
+donor_freq<-unlist(donor_list) %>%
+  table() %>% as_tibble() 
+
+colnames(donor_freq)<-c("POS", "freq")
+
+cd19_exons <- data.frame(
+  start = c(69, 476, 1041),
+  end = c(218, 742, 1244),
+  start_hg38 = c(28931939, 28932346, 28932911),
+  end_hg38 = c(28932088, 28932612, 28933114)
+)
+```
+
+
+
+# Correlation with Mihaela's scores
+
+## Comparison with SpliceAI 
+
+```{r data}
+comb_score <- readRDS("output/combined_score_mtx.rds")
+cd19_ss <- c(c(cd19_exons$start - 1), c(cd19_exons$end + 1))
+```
+
+
+Isoform info
+
+```{r}
+isoform_info <- merge(cbind(isoform = names(acceptor_list), acceptor_list %>% rbind_list()),
+  cbind(isoform = names(donor_list), donor_list %>% rbind_list()),
+  by = "isoform"
+)
+
+isoform_info <- isoform_info %>%
+  pivot_longer(cols = -isoform, names_to = "ss_type", values_to = "POS_ss") %>%
+  mutate(ss_type = ifelse(grepl("A", ss_type) == T, "3ss", "5ss")) %>%
+  drop_na()
+```
+
+
+Distributions of the different scores
+
+```{r}
+comb_score %>%
+  pivot_longer(cols = starts_with("("), names_to = "isoform", values_to = "score") %>%
+  ggplot(., aes(score, color = isoform)) +
+  geom_density() +
+  theme(legend.position = "none")
+```
+
+
+
+```{r}
+
+model_isoforms <- c("(219 475)(743 1040)", "(219 1040)", "(219 475)", "(219 657)(743 1040)", "(219 475)(743 1073)")
+
+max_comb_score <- comb_score[, !colnames(comb_score) %in% model_isoforms] %>%
+  pivot_longer(cols = starts_with("("), names_to = "isoform", values_to = "score") %>%
+  merge(., isoform_info, by = "isoform") %>%
+  select(-isoform) %>%
+  unique() %>%
+  filter(!POS_ss %in% cd19_ss) # %>%
+# group_by(Code, POS, ALT, REF) %>%
+# filter(score==max(score)) %>%
+# slice(1) %>%
+# ungroup()
+```
+
+
+
+
+
+
+Combine with SpliceAI
+
+
+#### Combined scores
+
+```{r}
+
+
+comb_score_spliceai <- merge(unfilter_vars %>% filter(!grepl("unmask", set)),
+  max_comb_score,
+  by.x = c("POS_minigene", "REF", "ALT", "ss_type"), by.y = c("POS", "REF", "ALT", "ss_type")
+) %>%
+  select(POS_minigene, REF, ALT, loss_score, gain_score, ss_type, POS_loss_minigene, POS_gain_minigene, POS_ss, score) %>%
+  unique() %>%
+  # filter(abs(POS_gain_minigene-POS_ss)<10) %>%
+  mutate(ss_match = ifelse(POS_gain_minigene == POS_ss, "match", "unmatch"))
+comb_score_spliceai %>% mutate(mutlabel = paste0(REF, POS_minigene, ALT)) -> comb_score_spliceai
+
+plotting_dt <- comb_score_spliceai %>%
+  filter(ss_match == "match") %>%
+  unique()
+
+noindel_max <- plotting_dt %>% 
+  filter(POS_loss_minigene %in% (cd19_ss)) %>%
+  filter(nchar(as.character(REF) ) == 1 & nchar(as.character(ALT)) == 1) %>% 
+  group_by(POS_minigene, REF, ALT ) %>% 
+  filter(score == max(score)) %>% 
+  ungroup()
+
+mutations_sep_splice_site<- ggplot( noindel_max
+                                     , aes(gain_score, score, label = mutlabel))+
+  geom_point(shape = 19, alpha=0.5) +
+  facet_grid(~POS_loss_minigene) +
+  labs(caption = paste0(
+    "Total (unique) mutations plotted = ",
+    noindel_max %>%  select(POS_minigene, REF, ALT) %>% unique() %>% nrow()
+  )) +
+  coord_equal() +
+  xlab("SpliceAI score") +
+  ylab("Combined mutation score") +
+  ggrepel::geom_text_repel(data = noindel_max %>% 
+                             filter(gain_score > 0.5 & score>0), size = 3, max.overlaps = 100) +
+ # scale_colour_gradient2(low = "darkgreen", high = "red", midpoint = 700, mid = "orange") +
+  labs(col = "Splice site\naffected") +
+  theme_bw()+
+  theme(panel.spacing = unit(2, "lines"))
+
+
+
+
+
+
+```
+
+
+```{r}
+
+library(extrafont)
+font_import(prompt = F)
+
+
+ggsave(mutations_sep_splice_site, 
+       filename = "out_plots/20210614_SpliceAI_vs_combined_score_ scatterplot_.pdf", 
+       family = "ArialMT", width = 12)
+
+ggsave(mutations_sep_splice_site, 
+       filename = "out_plots/20211006_SpliceAI_vs_combined_score_scatterplot_NoIndel_Max_PrevScore.pdf", 
+       family = "ArialMT", width = 12)
+
+```
+
+
+
+Paper numbers 
+
+```{r}
+# Total SpliceAI >0.5
+unfilter_vars %>% 
+  filter(!grepl("unmask", set)) %>%
+  filter(gain_score > 0.5) %>% 
+  select(POS, REF, ALT) %>% 
+  unique() %>%
+  dim
+```
+

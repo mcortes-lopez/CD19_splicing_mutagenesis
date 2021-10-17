@@ -1,0 +1,246 @@
+---
+title: "SuppFig 5: RBP expression selection"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+author: "Mariela Cortés López"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_float: true
+---
+
+```{r}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, out.width = "100%")
+```
+
+
+```{r setup}
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+library(singscore)
+```
+
+
+```{r Ball_data}
+
+ballsub <- fread("data/merged.Log2-FPKM_UQ.txt.gz", header = T)
+ballsub.mtx <- data.matrix(ballsub[, -c(1, 2)])
+rownames(ballsub.mtx) <- ballsub$GeneID
+
+sum_values_ball <- cbind(rowMeans(ballsub.mtx), rowMedians(ballsub.mtx))
+
+ballsub_ranked <- apply(sum_values_ball, 2, FUN = function(x) rank(x, ties.method = "random"))
+```
+
+
+```{r Normal_data}
+normalb <- fread("https://pecan.stjude.cloud/static/hg19/pan-all/Normcell-uq10.txt.gz")
+normalb.mtx <- data.matrix(normalb[, -c(1, 2)])
+normalb.mtx <- log(normalb.mtx + 1, base = 2)
+rownames(normalb.mtx) <- normalb$EGID
+
+sum_values_normalb <- cbind(rowMeans(normalb.mtx), rowMedians(normalb.mtx))
+
+normalb_ranked <- apply(sum_values_normalb, 2, FUN = function(x) rank(x, ties.method = "random"))
+```
+
+```{r NALM6_data}
+
+nalm6_expr <- fread("data/Expression_21Q2_Public_subsetted.csv") %>%
+  t() %>%
+  as.data.table(., keep.rownames = T)
+
+colnames(nalm6_expr) <- c("Gene", "log2(TPM+1)")
+nalm6_expr <- (nalm6_expr[-c(1:6), ])
+nalm6_expr$`log2(TPM+1)` <- as.numeric(nalm6_expr$`log2(TPM+1)`)
+
+nalm6_tpm <- data.matrix(2^nalm6_expr$`log2(TPM+1)` - 1)
+
+nalm6_ranked <- data.matrix(rank(nalm6_tpm[, 1], ties.method = "random"))
+rownames(nalm6_ranked) <- nalm6_expr$Gene
+```
+
+
+```{r RBPdata}
+
+rbps <- fread("output/tab/2021clean_RBP_table.tab")
+
+tested_rbps <- readLines("data/2021_TestedRBPs.list")
+tested_rbps_df <- rbps %>%
+  filter(gene_name %in% tested_rbps)
+
+rbp_pred <- readLines("output/119_RBP_sig.list")
+rbp_pred_df <- rbps %>%
+  filter(gene_name %in% rbp_pred)
+
+
+expr_ranks <- as.data.table(cbind(sum_values_ball, ballsub_ranked), keep.rownames = T)
+colnames(expr_ranks) <- c("GeneID", "MeanExpr", "MedianExpr", "maxRank_mean", "maxRank_median")
+
+expr_ranks <- expr_ranks %>%
+  mutate(
+    RBP = factor(ifelse(GeneID %in% rbps$ensembl_id, "RBP", "non-RBP"), 
+                 levels = c("non-RBP", "RBP"), ordered = T),
+   sigRBP = factor(ifelse(GeneID %in% rbp_pred_df$ensembl_id, "sigRBP", "non-sigRBP"),
+                 levels = c("non-sigRBP", "sigRBP"), ordered = T),
+    RBP_measured = factor(ifelse(GeneID %in% tested_rbps_df$ensembl_id, "tested", "not-tested"),
+                          levels = c("not-tested", "tested"), ordered = T)
+  )
+expr_ranks$Gene <- ballsub[match(expr_ranks$GeneID, ballsub$GeneID), ]$Gene
+
+
+expr_ranks_norm <- as.data.table(cbind(sum_values_normalb, normalb_ranked), keep.rownames = T)
+colnames(expr_ranks_norm) <- c("GeneID", "MeanExpr", "MedianExpr", "maxRank_mean", "maxRank_median")
+
+expr_ranks_norm <- expr_ranks_norm %>%
+  mutate(
+    RBP = factor(ifelse(GeneID %in% rbps$ensembl_id, "RBP", "non-RBP"), 
+                 levels = c("non-RBP", "RBP"), ordered = T),
+    sigRBP = factor(ifelse(GeneID %in% rbp_pred_df$ensembl_id, "sigRBP", "non-sigRBP"),
+                 levels = c("non-sigRBP", "sigRBP"), ordered = T),
+    RBP_measured = factor(ifelse(GeneID %in% tested_rbps_df$ensembl_id, "tested", "not-tested"),
+                          levels = c("not-tested", "tested"), ordered = T)
+  )
+
+expr_ranks_norm$Gene <- normalb[match(expr_ranks_norm$GeneID, normalb$EGID), ]$Symbol
+
+
+nalm_ranks <- cbind(nalm6_expr, nalm6_ranked)
+colnames(nalm_ranks) <- c("Gene", "log2(TPM+1)", "maxRank")
+
+nalm_ranks <- nalm_ranks %>%
+  mutate(
+    RBP = factor(ifelse(Gene %in% rbps$gene_name, "RBP", "non-RBP"),
+                 levels = c("non-RBP", "RBP"), ordered = T),
+    sigRBP = factor(ifelse(Gene %in% rbp_pred_df$gene_name, "sigRBP", "non-sigRBP"),
+                 levels = c("non-sigRBP", "sigRBP"), ordered = T),
+    RBP_measured = factor(ifelse(Gene %in% tested_rbps_df$gene_name, "tested", "not-tested"), 
+                          levels = c("not-tested", "tested"), ordered = T),
+    `log2(TPM+1)` = as.numeric(`log2(TPM+1)`)
+  )
+```
+
+
+
+```{r}
+rank_p_ball <- ggplot() +
+  ggrastr::geom_point_rast(
+    data = expr_ranks %>%
+      filter(RBP_measured == "not-tested"),
+    aes(maxRank_mean, (2^MeanExpr)), colour = "grey", pch = 1
+  ) +
+  geom_point(
+    data = expr_ranks %>%
+      filter(RBP_measured == "tested"),
+    aes(maxRank_mean, (2^MeanExpr)), colour = "red", size = 2.5, pch = 21
+  ) +
+  ylab(expression("FPKM-UQ (log"[2] * "scale)")) +
+  xlab("Rank") +
+  theme_classic() +
+  ggrepel::geom_text_repel(
+    data = expr_ranks %>%
+      filter(RBP_measured == "tested"),
+    aes(maxRank_mean, (2^MeanExpr) - 1, label = Gene), max.overlaps = 100, box.padding = 0.5
+  ) +
+  # ylim(-5, 20)+
+  ggtitle("B-ALL patients gene\nexpression ranked") +
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 2), breaks = c(0, 10, 100, 1000, 10000, 30000)) +
+  geom_hline(yintercept = 10, linetype = 2, colour = "grey70")
+
+rank_p_ball
+```
+
+```{r}
+rank_p_normalb <- ggplot() +
+  ggrastr::geom_point_rast(
+    data = expr_ranks_norm %>%
+      filter(RBP_measured == "not-tested"),
+    aes(maxRank_mean, (2^MeanExpr) - 1), colour = "grey", pch = 1
+  ) +
+  geom_point(
+    data = expr_ranks_norm %>%
+      filter(RBP_measured == "tested"),
+    aes(maxRank_mean, (2^MeanExpr) - 1), colour = "red", size = 2.5, pch = 21
+  ) +
+  ylab(expression("FPKM-UQ (log"[2] * "scale)")) +
+  xlab("Rank") +
+  theme_classic() +
+  ggrepel::geom_text_repel(
+    data = expr_ranks_norm %>%
+      filter(RBP_measured == "tested"),
+    aes(maxRank_mean, (2^MeanExpr) - 1, label = Gene), max.overlaps = 100, box.padding = 0.5
+  ) +
+  # ylim(c(0,20))+
+  ggtitle("Normal B-cells gene\nexpression ranked") +
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 2), breaks = c(0, 10, 100, 1000, 10000, 30000)) +
+  geom_hline(yintercept = 10, linetype = 2, colour = "grey70")
+
+rank_p_normalb
+```
+
+
+
+```{r}
+rank_p_nalm <- ggplot() +
+  ggrastr::geom_point_rast(
+    data = nalm_ranks %>%
+      filter(RBP_measured == "not-tested"),
+    aes(maxRank, (2^`log2(TPM+1)`) - 1), colour = "grey", pch = 1
+  ) +
+  geom_point(
+    data = nalm_ranks %>%
+      filter(RBP_measured == "tested"),
+    aes(maxRank, (2^`log2(TPM+1)`) - 1), colour = "red", size = 2.5, pch = 21
+  ) +
+  ylab(expression("TPM (log"[2] * "scale)")) +
+  xlab("Rank") +
+  theme_classic() +
+  ggrepel::geom_text_repel(
+    data = nalm_ranks %>%
+      filter(RBP_measured == "tested"),
+    aes(maxRank, (2^`log2(TPM+1)`) - 1, label = Gene), max.overlaps = 100, box.padding = 0.5
+  ) +
+  ggtitle("NALM-6 gene\nexpression ranked") +
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 2), breaks = c(0, 10, 100, 1000, 10000, 30000)) +
+  geom_hline(yintercept = 10, linetype = 2, colour = "grey70")
+
+rank_p_nalm
+```
+
+
+```{r fig.width=10}
+library(patchwork)
+
+rank_p_ball + rank_p_normalb + rank_p_nalm
+```
+
+```{r eval=FALSE, include=FALSE}
+pdf("output_pdf/20210903_Expression_filters.pdf", width = 10, height = 5, fonts = "ArialMT", useDingbats = F)
+rank_p_ball + rank_p_normalb + rank_p_nalm
+dev.off()
+```
+
+
+Some numbers for the paper 
+
+```{r}
+expr_ranks %>%
+  filter(MeanExpr > (log2(10))) %>%
+  count(sigRBP)
+```
+
+```{r}
+expr_ranks_norm %>%
+  filter(MeanExpr > (log2(10 + 1))) %>%
+  count(sigRBP)
+```
+
+```{r}
+nalm_ranks %>%
+  filter(`log2(TPM+1)` > (log2(10+1))) %>%
+  count(sigRBP)
+```
