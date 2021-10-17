@@ -1,0 +1,249 @@
+---
+title: "Isoforms functional features"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = F,  fig.width=10)
+```
+
+
+```{r}
+library(data.table)
+library(dplyr)
+isoforms<-readLines("data/101_isoforms.csv")
+
+donor_list<-gsub("\\(([0-9]+)\\s[0-9]+\\)","\\1,", isoforms)
+donor_list<-lapply(donor_list, function(x) c(as.numeric(strsplit(gsub(",$","",x), ",")[[1]]),1245))
+  
+acceptor_list<-gsub("\\([0-9]+\\s([0-9]+)\\)","\\1,", isoforms)
+acceptor_list<-lapply(acceptor_list, function(x) c(68,as.numeric(strsplit(gsub(",$","",x), ",")[[1]])))
+
+
+names(donor_list)<-isoforms
+names(acceptor_list)<-isoforms
+
+
+library(reshape2)
+
+donors<-melt(donor_list)
+acceptors<-melt(acceptor_list)
+
+num_isoforms<-seq_along(isoforms)
+names(num_isoforms)<-isoforms
+
+
+exons_tab<-cbind(donors, acceptors)
+colnames(exons_tab)<-c("end","isoform", "start", "iso2")
+exons_tab<-exons_tab %>%
+  dplyr::select(isoform, start, end) %>% 
+  mutate(num_iso=num_isoforms[isoform]) %>% 
+  mutate(start=start+1, end=end-1)
+
+```
+
+
+# Stop codon prediction 
+
+```{r}
+cd19_seq<-seqinr::read.fasta("../DNASeq/Minigene_Seq_ref_files/CD19_WT.minigene.fa")$chr %>%
+  toupper() 
+
+
+
+stopc<-c( "TAA", "TAG", "TGA")
+
+isoforms_w_seq<-exons_tab %>% 
+  rowwise() %>% 
+  mutate(seq=paste0(cd19_seq[start:end], collapse = "")) %>% 
+  ungroup() %>%
+  group_by(isoform, num_iso) %>% 
+  summarise(iso_seq=paste0(seq, collapse = "")) %>% 
+  ungroup() %>% 
+  arrange(num_iso) %>% 
+  dplyr::select(-num_iso)
+
+
+stop_list<-lapply(isoforms_w_seq$iso_seq, function(s){
+  cds<-paste0("ATG",regmatches(s, regexpr("ATG", s), invert = TRUE)[[1]][2])
+  codons<-strsplit(cds, "(?<=.{3})", perl = TRUE)[[1]]
+  pos_ptc<-(seq_along(codons)[codons%in%stopc]*3)-2
+  stop_codons_n<- sum(codons%in%stopc)
+  return(list(cds, stop_codons_n, pos_ptc))
+})
+isoforms_w_seq$cds_seq<-sapply(stop_list, `[[`, 1) 
+isoforms_w_seq$n_potential_PTC<-sapply(stop_list, `[[`, 2) 
+```
+
+# Calculate CDS length
+
+```{r}
+library("TxDb.Hsapiens.UCSC.hg38.knownGene")
+tx<-TxDb.Hsapiens.UCSC.hg38.knownGene
+cds_all<-cdsBy(tx,by="gene")
+tot_len_e1_3<-width(cds_all$`930`[1:3]) %>% sum()
+tot_nts_gene<-width(cds_all$`930`) %>% sum()
+left_nts<-tot_nts_gene-tot_len_e1_3
+
+isoforms_w_seq<-isoforms_w_seq %>% 
+  mutate(tx_total_nt=nchar(isoforms_w_seq$cds_seq)) %>% 
+  mutate(reading_frame=ifelse((left_nts+tx_total_nt)%%3==0,"in frame","out of frame"))
+
+
+#write.csv(isoforms_w_seq, "~/Seafile_IMB/Seafile/CD19/Paper_figures/output/isoforms_predicted_translational_features.csv", row.names = F)
+#saveRDS(isoforms_w_seq, "~/Seafile_IMB/Seafile/CD19/Paper_figures/output/isoforms_predicted_translational_features.rds")
+```
+
+# Basic Number plots
+
+```{r}
+library(ggplot2)
+isoforms_w_seq%>%
+  count(reading_frame, n_potential_PTC) %>% 
+  ggplot(., aes(fill=as.factor(n_potential_PTC), y=n, x=reading_frame))+
+  geom_bar(stat="identity", position=position_dodge(preserve = "single"))+
+  labs(fill="# of potential PTCs")+
+  scale_fill_brewer(palette = "Set1")+
+  ylab("Total isoforms")+
+  xlab("Reading frame preservation")+ 
+  scale_y_continuous(expand  = c(0,0.5))+
+  theme_bw()
+```
+
+
+
+# WT isoforms  figures with Potential PTCs 
+
+```{r}
+
+start_cds<-63
+isoform_n_vect<-exons_tab %>% 
+  rowwise() %>% 
+  mutate(seq=paste0(seq(start,end), collapse = ",")) %>% 
+  ungroup() %>%
+  group_by(isoform, num_iso) %>% 
+  summarise(iso_seq_n=paste0(seq, collapse = ",")) %>% 
+  ungroup() %>% 
+  arrange(num_iso) %>% 
+  dplyr::select(-num_iso) %>%
+  pull(iso_seq_n) %>% 
+  lapply(., function(s) strsplit(s, ",")[[1]][-seq(1,start_cds-1)])
+
+
+names(isoform_n_vect)<-isoforms_w_seq$isoform
+
+ptc_per_iso<-sapply(stop_list, `[[`, 3)  
+ptc_pos<-lapply(seq_along(stop_list), function(x) {
+  pos<-as.numeric(isoform_n_vect[[x]][ptc_per_iso[[x]]])
+  as.data.frame(pos)
+})
+
+names(ptc_pos)<-isoforms_w_seq$isoform
+ptc_tab<-data.table::rbindlist(ptc_pos, idcol = "isoform", use.names = T)
+#saveRDS(ptc_tab, "output/ptc_table.rds")
+```
+
+
+
+
+```{r eval=FALSE, include=FALSE}
+mut_list<-readLines("data/mutations_list")
+
+library(gsubfn)
+
+mut_tab<-data.frame(Code=mut_list, POS=gsub("(\\d+)\\d{2}$","\\1",mut_list),
+                    MUT=gsub("\\d+(\\d{2}$)","\\1",mut_list)) %>% 
+  mutate(MUT=gsub("^6(\\d)", "Ins_\\1",gsub("^5(\\d)", "Del_\\1", MUT))) %>% 
+  mutate(MUT=gsubfn(pattern = "01|02|03|04" ,list("01"="T", "02"="G", "03"="C","04"="A"),MUT))
+
+
+indel_not<-fread("data/indels_notation.space_corr.txt")
+indel_not<-indel_not%>% 
+  mutate(MUT=gsubfn(pattern = "1|2|3|4" ,list("1"="T", "2"="G", "3"="C","4"="A"),as.character(Alt))) %>% 
+  mutate(REF=gsubfn(pattern = "1|2|3|4" ,list("1"="T", "2"="G", "3"="C","4"="A"),as.character(Ref))) %>% 
+  dplyr::select(-Ref,-Alt) %>% 
+  dplyr::rename(POS=Pos)
+
+mut_tab<-merge(mut_tab, indel_not, all.x=T, by=c("Code", "POS"), suffixes=c("", "_detail"))
+
+mut_tab <-mut_tab%>% mutate(class=ifelse(is.na(MUT_detail),"single","indel"))
+head(mut_tab)
+
+```
+
+
+```{r eval=FALSE, include=FALSE}
+seq_mutator<- function(class, mut, pos, ref, mut2){
+  if(class=="single"){
+    new_seq<-c(cd19_seq[seq(1,pos-1)], mut, cd19_seq[seq(pos+1, length(cd19_seq))])
+    names(new_seq)<-seq_along(cd19_seq)
+  }
+  else if(class!="single" & nchar(ref)>nchar(mut2)){
+   new_seq<-c(cd19_seq[seq(1,pos-1)], strsplit(mut2, "")[[1]], cd19_seq[seq(pos+nchar(ref), length(cd19_seq))])
+   names(new_seq)<-c(seq_along(cd19_seq)[seq(1,pos-1)], pos, seq_along(cd19_seq)[seq(pos+nchar(ref), length(cd19_seq))])
+  }
+  else{
+   new_seq<-c(cd19_seq[seq(1,pos-1)], strsplit(mut2, "")[[1]], cd19_seq[seq(pos+1, length(cd19_seq))])
+   names(new_seq)<-c(seq_along(cd19_seq)[seq(1,pos-1)], rep(pos, nchar(mut2)), seq_along(cd19_seq)[seq(pos+1, length(cd19_seq))])
+  }
+  return(new_seq)
+}
+  
+mut_letters<-apply(mut_tab %>% 
+        dplyr::select(class, MUT, POS, REF, MUT_detail), 1, function(x) seq_mutator(class = x[1], mut = x[2], pos = as.numeric(x[3]), ref = x[4],mut2 =  x[5]))
+
+names(mut_letters)<-mut_tab$Code
+
+```
+
+
+
+
+# Isoform features
+
+```{r, eval=FALSE, include=FALSE}
+mut_tables<-lapply(mut_letters, function(rs){
+ isoforms_w_seq<-exons_tab %>% 
+  rowwise() %>% 
+  mutate(seq=paste0(rs[unique(names(rs)[start:end])], collapse = "")) %>% 
+  ungroup() %>%
+  group_by(isoform, num_iso) %>% 
+  summarise(iso_seq=paste0(seq, collapse = "")) %>% 
+  ungroup() %>% 
+  arrange(num_iso) %>% 
+  dplyr::select(-num_iso) 
+ 
+  stop_list<-lapply(isoforms_w_seq$iso_seq, function(s){
+    cds<-paste0("ATG",regmatches(s, regexpr("ATG", s), invert = TRUE)[[1]][2])
+    codons<-strsplit(cds, "(?<=.{3})", perl = TRUE)[[1]]
+    stop_codons_n<- sum(codons%in%stopc)
+    return(list(cds, stop_codons_n))
+  })
+  isoforms_w_seq$cds_seq<-sapply(stop_list, `[[`, 1) 
+  isoforms_w_seq$n_potential_PTC<-sapply(stop_list, `[[`, 2) 
+  isoforms_w_seq<-isoforms_w_seq %>% 
+  mutate(tx_total_nt=nchar(isoforms_w_seq$cds_seq)) %>% 
+  mutate(reading_frame=ifelse((left_nts+tx_total_nt)%%3==0,"in frame","out of frame"))
+
+  return(isoforms_w_seq)
+})
+
+
+saveRDS(mut_tables,"output/mut_tables.rds")
+
+
+saveRDS(isoforms_w_seq,"output/isoforms_table_wt.rds")
+
+```
+
+
+
+
+

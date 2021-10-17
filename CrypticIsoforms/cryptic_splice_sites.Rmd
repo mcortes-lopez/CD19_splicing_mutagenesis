@@ -1,0 +1,78 @@
+---
+title: "Cryptic sites"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = F,  fig.width=10)
+```
+
+
+```{r}
+library(data.table)
+library(dplyr)
+isoforms<-readLines("data/101_isoforms.csv")
+
+donor_list<-gsub("\\(([0-9]+)\\s[0-9]+\\)","\\1,", isoforms)
+donor_list<-lapply(donor_list, function(x) as.numeric(strsplit(gsub(",$","",x), ",")[[1]]))
+  
+acceptor_list<-gsub("\\([0-9]+\\s([0-9]+)\\)","\\1,", isoforms)
+acceptor_list<-lapply(acceptor_list, function(x) as.numeric(strsplit(gsub(",$","",x), ",")[[1]]))
+
+
+names(donor_list)<-isoforms
+names(acceptor_list)<-isoforms
+
+acceptor_freq<-unlist(acceptor_list) %>%
+  table() %>% as_tibble() 
+
+colnames(acceptor_freq)<-c("POS", "freq")
+
+donor_freq<-unlist(donor_list) %>%
+  table() %>% as_tibble() 
+
+colnames(donor_freq)<-c("POS", "freq")
+
+```
+
+
+
+```{r}
+library(ggplot2)
+
+ggplot(acceptor_freq, aes(as.numeric(POS), freq/101))+
+  geom_bar(stat="identity")
+```
+
+
+
+
+```{r}
+library(ggplot2)
+
+ggplot(donor_freq, aes(as.numeric(POS), freq/101))+
+  geom_bar(stat="identity")
+```
+
+
+How many new cryptic splice sites are?
+
+Acceptors: 
+
+```{r}
+print(nrow(acceptor_freq)-2)
+```
+
+Donor:
+
+```{r}
+print(nrow(donor_freq)-2)
+```
+

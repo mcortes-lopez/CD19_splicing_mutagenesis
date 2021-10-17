@@ -1,0 +1,406 @@
+---
+title: "Patient intron retention plots"
+author: "Mariela Cortés López"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+  pdf_document:
+    
+    toc: yes
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,warning = FALSE, message = FALSE, fig.pos = "center", fig.width = 10)
+```
+
+```{r setup}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(ggpubr)
+library(ggrepel)
+library(ASpli)
+library(raincloudplots)
+library(RColorBrewer)
+```
+
+
+```{r Read_bams}
+bampath <- "/fsimb/groups/imb-koeniggr/mariela/CD19/NOVARTIS_Paper_data/n_filter/realn/"
+bamfiles <- list.files(bampath ,pattern = ".bam$")
+
+sample_tab<-data.frame(PATIENT=gsub("[A-Z]_.*|[A-Z].+_.*","",bamfiles),
+                       TYPE=gsub("_.*","",bamfiles) %>% gsub("^[0-9]+", "", .),
+                       FILE= paste0(bampath, bamfiles))
+
+
+patients4comparison<-(sample_tab %>% 
+                        count(PATIENT) %>% 
+                        filter(n>1))$PATIENT
+
+```
+
+
+```{r CD19_annotation}
+TxDb <- GenomicFeatures::makeTxDbFromGFF(file = paste0(bampath, "genes_of_interest.gtf"),
+                        format="gtf")
+TxDb <- GenomicFeatures::makeTxDbFromGFF(file = paste0(bampath,"exon1-3.gtf"),
+                        format="gtf")
+
+TxDb
+```
+
+```{r}
+features <- binGenome( TxDb)
+
+targets<-data.frame(row.names = paste0('Sample.',gsub("_.*Aligned\\.out\\.bam", "", bamfiles)),
+                    bam=paste0(bampath, bamfiles),
+                    f1=gsub("[A-Z]_.*|[A-Z].+_.*","",bamfiles),
+                    f2=gsub("_.*","",bamfiles) %>% gsub("[0-9]", "", .),
+                    stringsAsFactors = FALSE
+)
+
+# Examinate the condition names
+getConditions(targets)
+
+# Load the bam files
+bams = loadBAM(targets)
+
+counts <- readCounts( features, bams, targets, readLength = 100, maxISize = 1000000, minAnchor=10)
+as <- AsDiscover( counts, targets, features, bams, readLength=100,threshold = 0)
+
+
+```
+
+Intron retention plot
+
+```{r}
+as@irPIR[2,] %>% melt() %>% 
+  filter(grepl("_", variable)) %>% 
+  tidyr::separate(variable, c("Patient", "SampleType"))  %>% 
+  ggplot(., aes( SampleType, value))+
+  geom_boxplot()+
+  geom_jitter(aes(colour=Patient), size=3,width=0.25, height = NULL)+
+  ylab("Percentage Intron Retention")+
+  scale_color_manual(values = colorRampPalette(brewer.pal(9, "Set1"))(15))  +
+  scale_y_continuous(limits = c(0,1))+ 
+  theme_bw()
+```
+
+
+Rain cloud plot between the initial screen an the relapse 
+
+```{r}
+ir_tab<-as@irPIR[2,] %>% 
+  reshape2::melt() %>% 
+  filter(grepl("_", variable)) %>% 
+  tidyr::separate(variable, c("Patient", "SampleType")) 
+
+ir_complete<- ir_tab %>% 
+  dplyr::select(Patient, SampleType, value) %>% 
+  pivot_wider(names_from = SampleType) %>% 
+  filter(!is.na(S) & !is.na(R))
+
+
+df_1x1 <- data_1x1(
+  array_1 = ir_complete$S,
+  array_2 = ir_complete$R)
+
+
+#extrafont::loadfonts()
+#extrafont::font_import()
+
+stype_comparison <- list( c(1, 2) )
+
+
+ttest<- t.test(y_axis ~ x_axis, data = df_1x1, paired = TRUE,
+        alternative = "less")
+
+wtest<- wilcox.test(y_axis ~ x_axis, data = df_1x1, paired = TRUE,
+        alternative = "less")
+
+wtest$p.value
+#pdf("Fig1_IntronRetention_Orlando.pdf", useDingbats = F,family = "Helvetica", width = 5, height = 5)
+ir_dist<-raincloud_1x1_repmes(
+  data = df_1x1,
+  colors = (c('dodgerblue', 'darkorange')),
+  fills = (c('dodgerblue', 'darkorange')),
+  line_color = 'gray20',
+  line_alpha = .3,
+  size = 2,
+  alpha = .6,
+  align_clouds = F) +
+ scale_x_continuous(breaks=c(1,2), labels=c("Screening", "Relapse"), limits=c(0, 3)) +
+  ylab("Percent Intron 2 Retention") +
+  xlab("")+
+  theme_minimal()+
+  theme(axis.text = element_text(size = 12), 
+        axis.title = element_text(size =12))+
+  scale_y_continuous(limits = c(0,1) ,labels = scales::percent)
+#dev.off()
+
+# Plot
+#pdf("Fig1_IntronRetention_Orlando.pdf", useDingbats = F,family = "Helvetica", width = 5, height = 5)
+ir_dist +
+  ggtitle(paste0("Wilcoxon, p = ", round(wtest$p.value, 4), 
+                 "\nT. test, p = ", round(ttest$p.value, 4)))
+
+#dev.off()
+
+```
+
+
+
+# Added on July 2021: Correlation of retention with RBP expression 
+
+
+```{r}
+geneexp <- fread("../RBP_predictions/output/tab/Orlando_GeneExpression_TPM_values.tab")
+geneexp <- geneexp[,-1] 
+
+mean_genexp<- geneexp %>% 
+  pivot_longer(cols = contains("Patient"), names_to = "sample", values_to = "TPM") %>% 
+  separate(sample, c("Prefix", "Patient", "sample_type")) %>% 
+  select(-Prefix, -Patient) %>% 
+  pivot_wider(names_from = sample_type, values_from = TPM, values_fn = list(TPM = mean)) %>% 
+  pivot_longer(cols = c(Screening, Relapse), values_to = "avTPM", names_to = "sample_type")
+
+ggplot(mean_genexp, aes(avTPM, fill = sample_type))+
+  geom_histogram(alpha = 0.5, bins = 10000)+
+  scale_x_continuous( scales::pseudo_log_trans(base = 10)) +
+  ggforce::facet_zoom(xlim  = c(0, 1000))
+
+```
+
+
+
+
+
+
+
+```{r}
+ir_values <- ir_complete %>%
+   select(Patient, S, R) %>% 
+   pivot_longer(cols = c(R, S), names_to = "Stage", values_to = "IR") %>% 
+   mutate(Stage = ifelse(Stage == "S", "Screening", "Relapse"))
+ 
+get_rbp_data <- function(rbp, expmtx = geneexp, unit_type = "TPM") {
+  rbp_exp <- expmtx %>% 
+    filter(RBP == {{ rbp }}) %>% 
+    pivot_longer(cols = contains("Patient"), names_to = "Patient", values_to = {{ unit_type }}) %>% 
+    separate(Patient, c("Pref", "Patient", "Stage")) %>% 
+    select(-Pref)
+  
+  exp_ir <- left_join(rbp_exp, ir_values, by = c("Patient", "Stage"))
+  
+   exp_patient <-  exp_ir %>%
+    pivot_wider(names_from = "Stage", values_from = c({{ unit_type }} , IR))
+
+  exp_raincloud <- data_1x1(
+    array_1 = unlist(exp_patient[, paste0(unit_type, "_Screening")]), 
+    array_2 = unlist(exp_patient[, paste0(unit_type, "_Relapse")]),
+    jit_distance = .09,
+    jit_seed = 321)
+  
+  return(list(rbp_exp = exp_ir, rbp_raincloud = exp_raincloud))
+}
+  
+
+
+rbp_corr_plot <- function(rbp_exp, exp_unit = "TPM") {
+  
+  exp_unit <- as.symbol(exp_unit)
+  
+  ggplot(rbp_exp, aes( {{ exp_unit }}  , IR, colour = Stage))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  #xlim(c(0, max(unlist(rbp_exp[, exp_unit]),  na.rm = T) + 50 ))+ 
+  ylim(c(0,1))
+}
+
+rbp_raincloud_plot <- function(rbp_rainc){
+  raincloud_1x1_repmes(
+    data = rbp_rainc,
+    colors = (c('dodgerblue', 'darkorange')),
+    fills = (c('dodgerblue', 'darkorange')),
+    line_color = 'gray20',
+    line_alpha = .3,
+    size = 2,
+    alpha = .6,
+    align_clouds = F) +
+    scale_x_continuous(breaks=c(1,2), labels=c("Screening", "Relapse"), limits=c(0, 3)) +
+    ylab("Expression") +
+    xlab("")+
+    theme_minimal()+
+    theme(axis.text = element_text(size = 12), 
+        axis.title = element_text(size =12))
+}
+
+```
+
+
+
+PTBP1 
+
+```{r}
+library(patchwork)
+rbp_corr_plot(get_rbp_data("PTBP1")[[1]]) + rbp_raincloud_plot(get_rbp_data("PTBP1")[[2]])
+```
+
+SRSF3
+
+```{r}
+rbp_corr_plot(get_rbp_data("SRSF3")[[1]]) + rbp_raincloud_plot(get_rbp_data("SRSF3")[[2]])
+```
+
+
+
+SF3B4
+
+```{r}
+rbp_corr_plot(get_rbp_data("SF3B4")[[1]]) + rbp_raincloud_plot(get_rbp_data("SF3B4")[[2]])
+```
+
+
+HNRNPK 
+
+```{r}
+rbp_corr_plot(get_rbp_data("HNRNPK")[[1]]) + rbp_raincloud_plot(get_rbp_data("HNRNPK")[[2]])
+```
+
+PCBP2 
+
+```{r}
+rbp_corr_plot(get_rbp_data("PCBP2")[[1]]) + rbp_raincloud_plot(get_rbp_data("PCBP2")[[2]])
+```
+
+
+# Correlations using log RPKMs 
+
+
+
+```{r}
+geneexp_rpkm <- fread("../RBP_predictions/output/tab/Orlando_logRPKM.tab")
+
+mean_genexp_rpkm <- geneexp_rpkm %>% 
+  pivot_longer(cols = contains("Patient"), names_to = "sample", values_to = "logRPKM") %>% 
+  separate(sample, c("Prefix", "Patient", "sample_type")) %>% 
+  select(-Prefix, -Patient) %>% 
+  pivot_wider(names_from = sample_type, values_from = logRPKM, values_fn = list(logRPKM = mean)) %>% 
+  pivot_longer(cols = c(Screening, Relapse), values_to = "mean_logRPKM", names_to = "sample_type")
+
+ggplot(mean_genexp_rpkm, aes(mean_logRPKM, fill = sample_type))+
+  geom_density(alpha = 0.5, binwidth = 0.1)
+```
+
+PTBP1
+
+```{r}
+rbp_corr_plot(get_rbp_data("PTBP1", expmtx = geneexp_rpkm , unit_type = "logRPKM")[[1]], exp_unit = "logRPKM") + 
+  rbp_raincloud_plot(get_rbp_data("PTBP1", expmtx =  geneexp_rpkm, unit_type = "logRPKM")[[2]])
+```
+
+SRSF3
+
+```{r}
+rbp_corr_plot(get_rbp_data("SRSF3", expmtx = geneexp_rpkm , unit_type = "logRPKM")[[1]], exp_unit = "logRPKM") + 
+  rbp_raincloud_plot(get_rbp_data("SRSF3", expmtx =  geneexp_rpkm, unit_type = "logRPKM")[[2]])
+```
+
+PCBP2
+
+```{r}
+rbp_corr_plot(get_rbp_data("PCBP2", expmtx = geneexp_rpkm , unit_type = "logRPKM")[[1]], exp_unit = "logRPKM") + 
+  rbp_raincloud_plot(get_rbp_data("PCBP2", expmtx =  geneexp_rpkm, unit_type = "logRPKM")[[2]])
+```
+
+SF3B4
+
+```{r}
+rbp_corr_plot(get_rbp_data("SF3B4", expmtx = geneexp_rpkm , unit_type = "logRPKM")[[1]], exp_unit = "logRPKM") + 
+  rbp_raincloud_plot(get_rbp_data("SF3B4", expmtx =  geneexp_rpkm, unit_type = "logRPKM")[[2]])
+```
+
+
+
+HNRNPK
+
+```{r}
+rbp_corr_plot(get_rbp_data("HNRNPK", expmtx = geneexp_rpkm , unit_type = "logRPKM")[[1]], exp_unit = "logRPKM") + 
+  rbp_raincloud_plot(get_rbp_data("HNRNPK", expmtx =  geneexp_rpkm, unit_type = "logRPKM")[[2]])
+```
+
+
+# Comparing delta of the changes 
+
+
+
+```{r delta_function}
+
+delta_plots <- function(rbp){
+  delta_rbp_tpm <- get_rbp_data( rbp )[[1]] %>% 
+   pivot_wider(names_from =  Stage, values_from = c(TPM, IR)) %>% 
+   mutate(delta_exp = TPM_Relapse - TPM_Screening, 
+         delta_IR = IR_Relapse - IR_Screening) 
+  
+  delta_rbp_rpkm <- get_rbp_data( rbp , expmtx = geneexp_rpkm, unit_type = "logRPKM")[[1]] %>% 
+   pivot_wider(names_from =  Stage, values_from = c(logRPKM, IR)) %>% 
+   mutate(delta_exp = logRPKM_Relapse - logRPKM_Screening, 
+         delta_IR = IR_Relapse - IR_Screening) 
+  
+  
+  rbp_deltas <- rbindlist(list("log(RPKM)" = delta_rbp_rpkm, "TPM" = delta_rbp_tpm), 
+            fill = T, idcol = "method" )
+  
+  delta_p <- ggplot(rbp_deltas, aes(delta_exp, delta_IR, colour = method))+
+    geom_point()+
+    geom_smooth( method = lm) +
+    ggpubr::stat_cor(method = "pearson", colour = "black") +
+    facet_wrap(~method, scales = "free_x")+
+    xlab("Delta Expression (Relapse - Screen)")+
+    ylab("Delta Intron 2 retention (Relapse - Screen)")
+  
+  return(delta_p)
+}
+
+```
+
+
+PTBP1
+
+```{r}
+delta_plots("PTBP1")
+```
+
+
+PCBP2
+
+```{r}
+delta_plots("PCBP2")
+```
+
+SRSF3
+
+```{r}
+delta_plots("SRSF3")
+```
+
+
+SF3B4
+
+```{r}
+delta_plots("SF3B4")
+```
+
+
+HNRNPK
+
+```{r}
+delta_plots("HNRNPK")
+```
+
+

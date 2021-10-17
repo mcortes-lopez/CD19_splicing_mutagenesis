@@ -6,13 +6,13 @@ Repository with the analysis of the paper:
 
 by Cortés-López, Schulz, Enculescu et al.
 Preprint: 
-[![DOI](https://doi.org/10.1101/2021.10.08.463671)
+[!DOI](https://doi.org/10.1101/2021.10.08.463671)
 
 
 
-# List of analysis and links to corresponding folder: 
+## List of analyses and links to corresponding folder: 
 
-- [Orlando **et al** Isoform re-analysis](Orlando_re-analysis)
+- [Orlando _et al_ Isoform re-analysis](Orlando_re-analysis)
 - [DNA Demultiplexing](demultiplexing_scripts/DNAseq)
 - [Variant calling](VariantCalling_DNAseq)
 - [RNA Demultiplexing](demultiplexing_scripts/RNAseq)

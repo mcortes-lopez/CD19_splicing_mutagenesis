@@ -1,0 +1,232 @@
+---
+title: "Isoforms plot"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = F,  fig.width=10)
+```
+
+
+```{r}
+library(data.table)
+library(dplyr)
+isoforms<-readLines("data/101_isoforms.csv")
+
+donor_list<-gsub("\\(([0-9]+)\\s[0-9]+\\)","\\1,", isoforms)
+donor_list<-lapply(donor_list, function(x) c(as.numeric(strsplit(gsub(",$","",x), ",")[[1]]),1245))
+  
+acceptor_list<-gsub("\\([0-9]+\\s([0-9]+)\\)","\\1,", isoforms)
+acceptor_list<-lapply(acceptor_list, function(x) c(68,as.numeric(strsplit(gsub(",$","",x), ",")[[1]])))
+
+
+names(donor_list)<-isoforms
+names(acceptor_list)<-isoforms
+
+
+library(reshape2)
+
+donors<-melt(donor_list)
+acceptors<-melt(acceptor_list)
+
+num_isoforms<-rev(seq_along(isoforms)*3)
+names(num_isoforms)<-isoforms
+
+
+exons_tab<-cbind(donors, acceptors)
+colnames(exons_tab)<-c("end","isoform", "start", "iso2")
+exons_tab<-exons_tab %>%
+  dplyr::select(isoform, start, end) %>% 
+  mutate(num_iso=num_isoforms[isoform]) 
+
+junctions_tab<-cbind(donors %>% filter(value!=1245), acceptors %>% filter(value!=68))
+colnames(junctions_tab)<-c("donor", "isoform","acceptor","iso2") 
+junctions_tab<-junctions_tab %>% 
+  dplyr::select(isoform, donor, acceptor) %>%
+    mutate(num_iso=num_isoforms[isoform])
+
+base_exons<-do.call("rbind", replicate(length(num_isoforms), exons_tab%>%filter(num_iso==num_isoforms[1]), simplify = F))
+
+base_exons$isoform<-rep(names(num_isoforms), each=3)
+base_exons$num_iso<-rep(num_isoforms, each=3)
+fill_col<-c("exon 1", "exon 2", "exon 3")
+base_exons$fillcol<-rep(fill_col, length(num_isoforms)) 
+base_exons<-base_exons
+
+
+
+base_junctions<-do.call("rbind", replicate(length(num_isoforms), junctions_tab%>%filter(num_iso==num_isoforms[1]), simplify = F))
+base_junctions$isoform<-rep(names(num_isoforms), each=2)
+base_junctions$num_iso<-rep(num_isoforms, each=2)
+base_junctions<-base_junctions
+
+
+```
+
+# Figure
+
+```{r, fig.height=45, fig.width=8, out.width="100%"}
+library(ggplot2)
+
+all_isoforms<-ggplot() +
+  geom_rect(data=base_exons, aes(ymin=num_iso-0.5, ymax=num_iso+0.5, xmin=start, xmax=end, fill=fillcol))+
+  geom_segment(data=base_junctions, aes(x=donor, xend=acceptor,y=num_iso, yend=num_iso), colour="black", size=0.7)+
+  geom_rect(data=exons_tab, aes(ymin=num_iso-0.5, ymax=num_iso+0.5, xmin=start, xmax=end), fill=NA,colour="red", size=0.7)+
+  geom_curve(data=junctions_tab, aes(x=donor, xend=acceptor,y=num_iso, yend=num_iso), colour="red", curvature =0.1, size=0.7)+
+  scale_fill_manual(values = c("black", "grey", "black"))+
+  theme_light()+
+  scale_y_continuous(breaks = c(0, num_isoforms), labels = c("", names(num_isoforms)), expand = c(0,0), limits = c(0,102*3))+
+  theme(axis.text.y = element_text(colour = "black"),
+        axis.text.x = element_text(colour = "grey50"), axis.ticks.x = element_line(colour = "grey"), legend.position = "")+
+  ylab("Isoform")+
+  xlab("Minigene Position")
+  
+
+
+```
+
+
+
+# Add PTC and translation info
+
+```{r}
+ptc_tab<-readRDS("output/ptc_table.rds")
+iso_function<-readRDS("output/isoforms_table_wt.rds")
+
+
+ptc_tab$num_iso<-num_isoforms[ptc_tab$isoform]
+
+junctions_tab$reading_frame<-iso_function$reading_frame[match(junctions_tab$isoform,iso_function$isoform)]
+exons_tab$reading_frame<-iso_function$reading_frame[match(exons_tab$isoform,iso_function$isoform)]
+
+ptc_isoforms<-unique(ptc_tab$isoform)
+
+junctions_tab$final_pred<-apply(junctions_tab[,c("isoform", "reading_frame")], 1,  function(x){
+  if(x[2]=="in frame" & !(x[1] %in% ptc_isoforms)){
+    final_pred<-"translatable"
+  }
+  else if(x[2]=="in frame" & (x[1] %in% ptc_isoforms)){
+    final_pred<- "not translatable in frame"
+  }
+  else{
+    final_pred<-"not translatable out of frame"
+  }
+  return(final_pred)
+  })
+
+exons_tab$final_pred<-apply(exons_tab[,c("isoform", "reading_frame")], 1,  function(x){
+  if(x[2]=="in frame" & !(x[1] %in% ptc_isoforms)){
+    final_pred<-"translatable"
+  }
+  else if(x[2]=="in frame" & (x[1] %in% ptc_isoforms)){
+    final_pred<- "not translatable in frame"
+  }
+  else{
+    final_pred<-"not translatable out of frame"
+  }
+  return(final_pred)
+  })
+
+
+all_isoforms<-ggplot() +
+  geom_rect(data=base_exons, aes(ymin=num_iso-0.5, ymax=num_iso+0.5, xmin=start, xmax=end, fill=fillcol))+
+  geom_segment(data=base_junctions, aes(x=donor, xend=acceptor,y=num_iso, yend=num_iso), colour="black", size=0.7)+
+  geom_rect(data=exons_tab, aes(ymin=num_iso-0.5, ymax=num_iso+0.5, xmin=start, xmax=end, colour=final_pred),
+            fill=NA, size=0.7)+
+  geom_curve(data=junctions_tab, aes(x=donor, xend=acceptor,y=num_iso, yend=num_iso, colour=final_pred), 
+             curvature =0.1, size=0.7)+
+  scale_colour_manual(values=c( "not translatable in frame"="royalblue","not translatable out of frame"="red","translatable"="forestgreen"))+
+  scale_fill_manual(values = c("black", "grey", "black"))+
+  theme_light()+
+  scale_y_continuous(breaks = c(0, num_isoforms), labels = c("", names(num_isoforms)), expand = c(0,0), limits = c(0,102*3))+
+  theme(axis.text.y = element_text(colour = "black"),
+        axis.text.x = element_text(colour = "grey50"), axis.ticks.x = element_line(colour = "grey"), legend.position = "")+
+  ylab("Isoform")+
+  xlab("Minigene Position")+
+  geom_segment(data=ptc_tab, aes(x=pos, xend=pos,y=num_iso-0.5, yend=num_iso+0.5), colour="darkred")
+
+ggsave(plot= all_isoforms, filename = "output/all_isoforms_translation.pdf", height = 30)
+
+```
+
+
+
+
+# Strongest isoforms 
+
+```{r}
+isoform_strongest_as<-read.table("data/strongest_associations_with_splice_AI_scores.txt", header=T, sep="\t")
+isoform_order<-as.numeric(isoform_strongest_as$isoform)*5
+names(isoform_order)<-levels(isoform_strongest_as$isoform)
+
+
+isoform_diagrams<-ggplot() +
+  geom_rect(data=base_exons %>% filter(isoform %in% isoform_strongest_as$isoform)%>%
+              mutate(num_iso=isoform_order[isoform]),
+            aes(ymin=num_iso-0.5, ymax=num_iso+0.5, xmin=start, xmax=end, fill=fillcol))+
+  geom_segment(data=base_junctions  %>% filter(isoform %in% isoform_strongest_as$isoform)%>%
+              mutate(num_iso=isoform_order[isoform]), 
+               aes(x=donor, xend=acceptor,y=num_iso, yend=num_iso), colour="black", size=0.7)+
+  geom_rect(data=exons_tab %>% filter(isoform %in% isoform_strongest_as$isoform)%>%
+              mutate(num_iso=isoform_order[isoform]), 
+            aes(ymin=num_iso-0.5, ymax=num_iso+0.5, xmin=start, xmax=end, fill=NA,colour=final_pred), size=0.7)+
+  geom_curve(data=junctions_tab %>% filter(isoform %in% isoform_strongest_as$isoform)%>% 
+               mutate(num_iso=isoform_order[isoform]),
+             aes(x=donor, xend=acceptor,y=num_iso, yend=num_iso, colour=final_pred), curvature =0.1, size=0.7)+
+  scale_colour_manual(values=c( "not translatable in frame"="royalblue","not translatable out of frame"="red","translatable"="forestgreen"))+
+  scale_fill_manual(values = c("black", "grey", "black"))+
+  theme_light()+
+  scale_y_continuous(breaks = c(0, isoform_order), labels = c("",names(isoform_order)))+
+  theme(axis.text.y = element_text(colour = "black"),
+        axis.text.x = element_text(colour = "grey50"), axis.ticks.x = element_line(colour = "grey"), legend.position = "")+
+  ylab("Isoform")+
+  xlab("Minigene Position")+
+  geom_segment(data=ptc_tab%>% 
+                 filter(isoform %in% isoform_strongest_as$isoform)%>%
+                 mutate(num_iso=isoform_order[isoform]), aes(x=pos, xend=pos,y=num_iso-0.5, yend=num_iso+0.5), colour="darkred")
+
+```
+
+
+# splice AI scores
+
+```{r}
+spliceAI_panel<-ggplot()+
+  geom_rect(data = base_exons[1:3,], mapping=aes(xmin=start, xmax=end, ymin=0, ymax=1),fill="grey50", alpha=0.5)+
+  geom_segment(data=isoform_strongest_as, aes(x=POS_MINIGENE, y=score, xend=splice_site, yend=score, colour=ALT))+
+  geom_point(data=isoform_strongest_as, aes(x=POS_MINIGENE, y=score,colour=ALT))+
+  ylab("Splice AI score")+
+  xlab("")+
+  ggtitle("Position mutated to new criptic splice site ")+
+  scale_y_continuous(expand = c(0,0))+
+  scale_colour_manual(values = c("forestgreen", "red"))+
+  theme_bw()
+
+
+```
+
+# Meged plot
+
+```{r}
+library(patchwork)
+merged_plots<-(spliceAI_panel/isoform_diagrams)+
+    plot_layout(heights = c(1, 3))
+
+merged_plots
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave(plot= merged_plots, filename = "output/strongest_isoforms_with_spliceAI_values_and_functional_info.pdf", height = 10)
+
+```
+
+

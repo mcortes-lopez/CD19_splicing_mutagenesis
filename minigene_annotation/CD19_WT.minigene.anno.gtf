@@ -1,0 +1,5 @@
+chr1	CD19_minigene	gene	69	1244	.	.	.	gene_id "CD19";
+chr1	CD19_minigene	transcript	69	1244	.	.	.	gene_id "CD19"; transcript_id "CD19.1";
+chr1	CD19_minigene	exon	69	218	.	.	.	gene_id "CD19"; transcript_id "CD19.1";
+chr1	CD19_minigene	exon	476	742	.	.	.	gene_id "CD19"; transcript_id "CD19.1";
+chr1	CD19_minigene	exon	1041	1244	.	.	.	gene_id "CD19"; transcript_id "CD19.1";

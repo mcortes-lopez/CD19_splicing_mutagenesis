@@ -1,0 +1,126 @@
+---
+title: ""
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = F,  fig.width=10)
+```
+
+
+
+```{r}
+mut_list<-readRDS("output/mut_tables.rds")
+wt<-readRDS("output/isoforms_table_wt.rds")
+
+
+mutcodes<-readLines("data/mutations_list")
+library(dplyr)
+
+library(gsubfn)
+cd19_seq<-seqinr::read.fasta("../DNASeq/Minigene_Seq_ref_files/CD19_WT.minigene.fa")$chr %>%
+  toupper() 
+mut_tab<-data.frame(Code=mutcodes, POS=gsub("(\\d+)\\d{2}$","\\1",mutcodes),
+                    MUT=gsub("\\d+(\\d{2}$)","\\1",mutcodes)) %>% 
+  mutate(MUT=gsub("^6(\\d)", "Ins_\\1",gsub("^5(\\d)", "Del_\\1", MUT))) %>% 
+  mutate(MUT=gsubfn(pattern = "01|02|03|04" ,list("01"="T", "02"="G", "03"="C","04"="A"),MUT)) %>% 
+  mutate(REF = cd19_seq[POS]) %>% 
+  filter(POS!=1300)
+
+
+indel_not<-data.table::fread("data/indels_notation.space_corr.txt")
+indel_not<-indel_not%>% 
+  mutate(MUT=gsubfn(pattern = "1|2|3|4" ,list("1"="T", "2"="G", "3"="C","4"="A"),as.character(Alt))) %>% 
+  mutate(REF=gsubfn(pattern = "1|2|3|4" ,list("1"="T", "2"="G", "3"="C","4"="A"),as.character(Ref))) %>% 
+  dplyr::select(-Ref,-Alt) %>% 
+  dplyr::rename(POS=Pos)
+
+
+
+mut_tab_all<- rbind(indel_not,mut_tab) %>% 
+  filter(!grepl("Del|Ins", MUT))
+
+
+mut_tab_all<-mut_tab_all%>% select(POS, REF, MUT, Code) %>% rename(ALT=MUT)
+
+reading_frame_counts<-lapply(mut_list, function(x) x%>% 
+                               mutate(potential_PTC=ifelse(n_potential_PTC>0, "yes", "no")) %>% 
+                               count(reading_frame,potential_PTC)) %>% 
+  data.table::rbindlist(., use.names = T,idcol = "Code")
+
+
+```
+
+
+# WT mean value 
+
+```{r, fig.width=15, out.width="100%"}
+library(ggplot2)
+cd19_exons<- data.frame(start=c(68,475,1040), end=c(219,743,1245), exon=c("exon 1", "exon 2", "exon 3"),stringsAsFactors = F)
+sum_mut<-merge(reading_frame_counts, mut_tab_all, by="Code") %>%
+  mutate(mut_type=ifelse(nchar(MUT)>1 | nchar(REF)>1, "indel", "single")) %>% 
+               filter(reading_frame=="in frame" & potential_PTC=="no")
+ggplot()+
+  geom_rect(data = cd19_exons, aes( ymin=0, ymax=35, xmin=start, xmax=end,fill=exon), alpha=0.5)+
+  geom_point(data=sum_mut, aes(x = as.numeric(POS), n, colour=mut_type), shape=1)+
+  theme_bw()+
+  scale_fill_manual(values = c("black", "grey", "black"))+
+  xlab("Minigene position")+
+  ylab("Total isoforms that would\nbe translatable")
+  
+  
+  
+
+```
+
+The WT value is 21
+
+# Positions with more translatable isoforms (>21)
+
+```{r}
+merge(reading_frame_counts, mut_tab_all, by="Code") %>%
+  filter(reading_frame=="in frame" & potential_PTC=="no" & n>21) %>% 
+  count(POS) %>% 
+  arrange(desc(n))
+```
+
+
+# Positions with less translatable isoforms (< 21)
+
+```{r}
+merge(reading_frame_counts, mut_tab_all, by="Code") %>%
+  filter(reading_frame=="in frame" & potential_PTC=="no" & n<21) %>% 
+  count(POS) %>% 
+  arrange(desc(n))
+```
+
+# Are the affected possitions containing mostly Indels?
+
+## More translatable
+
+```{r}
+merge(reading_frame_counts, mut_tab_all, by="Code") %>%
+  filter(reading_frame=="in frame" & potential_PTC=="no" & n> 21 & (nchar(MUT)>1 | nchar(REF)>1) )%>% 
+  count(POS) %>% 
+  arrange(desc(n))
+```
+
+
+## Less translatable 
+```{r}
+merge(reading_frame_counts, mut_tab_all, by="Code") %>%
+  filter(reading_frame=="in frame" & potential_PTC=="no" & n< 21 & (nchar(MUT)>1 | nchar(REF)>1) )%>% 
+  count(POS) %>% 
+  arrange(desc(n))
+```
+
+
+
+
