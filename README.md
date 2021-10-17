@@ -20,7 +20,7 @@ Preprint:
 - [Cryptic isoforms](CrypticIsoforms)
 - [MaxEnt analysis](MaxEnt_analysis)
 - [SpliceAI analysis](SpliceAI_analysis)
-- [DeepRipe analysis](RNP_predictions/DeepRiPe)
+- [DeepRipe analysis](RBP_predictions/DeepRipe_analysis/)
 - [Other RBP analysis](RBP_predictions)
 
 
