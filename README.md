@@ -5,9 +5,12 @@ Repository with the analysis of the paper:
 **High-throughput mutagenesis identifies mutations and RNA-binding proteins controlling _CD19_ splicing and CART-19 therapy resistance** 
 
 by Cortés-López, Schulz, Enculescu et al.
+
 Preprint: 
 [doi.org/10.1101/2021.10.08.463671](https://doi.org/10.1101/2021.10.08.463671)
 
+This repository:
+[![DOI](https://zenodo.org/badge/400335230.svg)](https://zenodo.org/badge/latestdoi/400335230)
 
 
 ## List of analyses and links to corresponding folder: 
