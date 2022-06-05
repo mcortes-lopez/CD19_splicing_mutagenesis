@@ -1,0 +1,10 @@
+cff-version: 1.1.0
+message: "If you use any of these scripts/data, please cite it as below."
+authors:
+  - family-names: Cortés López
+    given-names: Mariela
+    orcid: 0000-0002-8951-4811
+title: mcortes-lopez/CD19_splicing_mutagenesis: Published analyses
+version: v1.0
+date-released: 2017-12-18
+            
