@@ -6,8 +6,7 @@ Repository with the analysis of the paper:
 
 by Cortés-López, Schulz, Enculescu et al.
 Preprint: 
-
-[!DOI](https://doi.org/10.1101/2021.10.08.463671)
+[doi.org/10.1101/2021.10.08.463671](https://doi.org/10.1101/2021.10.08.463671)
 
 
 
@@ -22,6 +21,7 @@ Preprint:
 - [SpliceAI analysis](SpliceAI_analysis)
 - [DeepRipe analysis](RBP_predictions/DeepRipe_analysis/)
 - [Other RBP analysis](RBP_predictions)
+- [External variants collection](External_variant_data_collection)
 
 
 Most of the analyses require the _CD19_ exon 1-3 minigene annotation:
